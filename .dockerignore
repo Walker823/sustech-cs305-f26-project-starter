@@ -1,0 +1,6 @@
+**
+!Dockerfile
+!framework/
+!framework/*.py
+!student/
+!student/*.py

@@ -1,0 +1,13 @@
+# Submission archives: build locally, submit through the OJ, never commit
+submission*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local experiment output
+runtime/
+out/
+*.jsonl

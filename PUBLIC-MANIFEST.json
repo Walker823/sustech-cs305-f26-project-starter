@@ -1,0 +1,22 @@
+{
+  ".dockerignore": "0a69a5fcd41c66a7cdfe933f29292d8c273560fd40a65f68999d9c1e2f462a9b",
+  "Dockerfile": "103ef855fa924cae7b055456485d3691b33ed1f54015a11a66d933283264946c",
+  "docs/Protocol.pdf": "794c6104475281373ef7fd48936c550f9a7650fbcb1dd56447d9338ff55da3ca",
+  "docs/Specification.pdf": "4b4992a4ca99e3d637cce74bc47164637015711a65d34d8306a66454d7324e18",
+  "framework/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "framework/cdn_runtime.py": "3d0f78aabc90bf57fb6003d6aa0deb61e8f8bfe09b71f89b99752c3bc548e025",
+  "framework/client_runtime.py": "8f488c3623206a00ce5a0ee6c178cf64e2d3702540f8109363ccb30c8f615414",
+  "framework/common.py": "6f9e39822db0b156c68dcab4056b1c1e265ac33787b30cb6f6ef4255156faa4b",
+  "framework/data.py": "88aae1d35569e4a0235cf8adc168f381b2b6c8502d1b46ebc8db0389e6310cf0",
+  "framework/origin.py": "dc9ab62571b3a97ba7e91aa7014b5f064c598352f16168b1243a6b0cc05fa770",
+  "student/__init__.py": "03ea5bcbbf3e88087096b2d9dabadc2b14e00b182296378f5bc2223d3cac1055",
+  "student/cache.py": "7b100785f0c0e5012fa385d440e1e39c1dcbabde645c1fe725116172e5b45bb9",
+  "student/cdn.py": "0598f912a51f205f0efcf6b32da784c5c74203effecdb91ea21586c5c97c7675",
+  "student/client.py": "bc069b2ce7a18e318602702f01097ba23e146cc30166a4902576e4b4c6924f04",
+  "student/download.py": "fcc8db50f087a06b0ff42182d9877ea48b2d622364829613386f9f3a914cccf9",
+  "student/measurement.py": "c540e10cf7db9314738f80bf428c8cf8ee7b9a8dd07c562576ef7b66736dc69b",
+  "student/scheduler.py": "e480935aa025664a36bc79b4a886306e414fae87b761de96722de894e56c572a",
+  "tools/fault_proxy.py": "3bfead6282531641ac4bd55381050ba92bd418c09389e538b75f390db2ba2e97",
+  "tools/package_submission.py": "f763688a67b9d01442166a05fa5850a3883313e73afa579a341c255ef7593a13",
+  "tools/public_tests.py": "fddacae6dd9340aa2a326d11eb213071dd083ad164870309b2bd55182f81fb97"
+}

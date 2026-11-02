@@ -1,0 +1,4 @@
+# Keep LF in the working tree so PUBLIC-MANIFEST.json still matches after a Windows clone.
+* text=auto eol=lf
+*.pdf binary
+*.png binary
