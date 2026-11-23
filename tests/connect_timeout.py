@@ -1,6 +1,6 @@
 """Real SYN-drop checks. Refuses to modify the host network namespace.
 
-Run as root via: unshare --net -- .venv/bin/python tests/connect_timeout.py
+Run as root via: unshare --net -- python3 -B tests/connect_timeout.py
 """
 import json
 import os

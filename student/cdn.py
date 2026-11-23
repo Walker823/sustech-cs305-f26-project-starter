@@ -7,7 +7,8 @@ from framework.common import (MAX_MANIFEST_BYTES, ProjectError, base_url,
                               integer, positive, sha256, valid_id,
                               validate_manifest)
 from framework.cdn_runtime import main
-from student.cache import ByteLRUCache, CoalescedCache, LRUCache
+from student.cache import (MAPPED_CHUNK_MIN, ByteLRUCache, CachedChunk, ChunkBody,
+                           ChunkMemory, CoalescedCache, LRUCache, MappedChunk)
 from student.transport import HTTPTransport
 from student.util import BoundedEvents, EventBudget
 
@@ -21,7 +22,10 @@ class CDN:
         if (not isinstance(self.token, str) or not self.token.isascii()
                 or len(self.token) < 16 or "\r" in self.token or "\n" in self.token):
             raise ProjectError("INVALID_CONFIG", "origin_chunk_token must contain at least 16 ASCII characters")
-        self.cache = LRUCache(config["cache_capacity_chunks"])
+        self._chunk_memory = ChunkMemory()
+        # Eviction can drop the last body reference and release its reservation
+        # on the same thread. A shared reentrant lock keeps this atomic.
+        self.cache = LRUCache(config["cache_capacity_chunks"], lock=self._chunk_memory.condition)
         self.limit = integer(config.get("max_active_requests", 8), "max_active_requests", 1, 64)
         self.slots = threading.BoundedSemaphore(self.limit)
         self.lock = threading.Lock()
@@ -33,13 +37,16 @@ class CDN:
         self.read_timeout = positive(config.get("read_idle_timeout_s", 10), "read_idle_timeout_s")
         self.body_deadline = positive(config.get("body_deadline_s", 120), "body_deadline_s")
         budget = self.connect_timeout + self.read_timeout + self.body_deadline
-        self._manifests = ByteLRUCache(config.get("manifest_cache_bytes", 4 * 1024 * 1024))
+        manifest_limit = 4 * 1024 * 1024
+        manifest_capacity = integer(config.get("manifest_cache_bytes", manifest_limit),
+                                    "manifest_cache_bytes", 1, 64 * 1024 * 1024)
+        self._manifests = ByteLRUCache(min(manifest_capacity, manifest_limit))
         self._manifest_fills = CoalescedCache(self._manifests, budget)
         self._chunk_fills = CoalescedCache(self.cache, budget, require_cached_hit=True)
         # Bound peak JSON parsing memory for different uncached files, too.
         self._manifest_slots = threading.BoundedSemaphore(1)
 
-    def _get(self, path, request_id, *, chunk=False, expected_length=None):
+    def _get(self, path, request_id, *, chunk=False, expected_length=None, destination=None):
         headers = {"X-Request-ID": request_id}
         if chunk:
             headers["X-Origin-Token"] = self.token
@@ -53,11 +60,14 @@ class CDN:
                 absolute_deadline=time.monotonic() + self.connect_timeout
                 + self.read_timeout + self.body_deadline,
                 expected_length=expected_length, read_error_body=False,
+                destination=destination,
             )
         except ProjectError as exc:
             if chunk and exc.code == "CHUNK_LENGTH_MISMATCH":
                 raise ProjectError("UPSTREAM_INTEGRITY_ERROR", "origin chunk length does not match manifest", 502) from exc
             raise ProjectError("ORIGIN_ERROR", f"origin transport failed: {exc.code}", 502) from exc
+        finally:
+            destination = None  # Do not pin the mapping through an error traceback.
 
     def _manifest(self, file_id, request_id):
         # Immutable file IDs permit cached trusted metadata. In-flight fills
@@ -77,9 +87,16 @@ class CDN:
             if response.status != 200:
                 raise ProjectError("ORIGIN_ERROR", f"manifest HTTP {response.status}", 502)
             try:
-                return validate_manifest(json.loads(response.body), file_id)
+                manifest = validate_manifest(json.loads(response.body), file_id)
             except (ValueError, RecursionError, ProjectError) as exc:
                 raise ProjectError("ORIGIN_ERROR", "invalid origin manifest", 502) from exc
+            finally:
+                response = None
+            digests = bytearray(len(manifest["chunks"]) * 32)
+            for index, chunk in enumerate(manifest["chunks"]):
+                offset = 32 * index
+                digests[offset:offset + 32] = bytes.fromhex(chunk["sha256"])
+            return manifest["file_size"], manifest["chunk_size"], bytes(digests)
         finally:
             self._manifest_slots.release()
 
@@ -93,32 +110,56 @@ class CDN:
             # Verified immutable bytes are sufficient to serve a real HIT,
             # even when its metadata was evicted or Origin is unavailable.
             self.log.emit("cache_hit", request_id=request_id, file_id=file_id, chunk_id=chunk_id)
-            return cached, "HIT", sha256(cached)
-        manifest = self._manifest(file_id, request_id)
-        if chunk_id >= len(manifest["chunks"]):
+            return cached.data, "HIT", cached.digest
+        file_size, chunk_size, digests = self._manifest(file_id, request_id)
+        offset = chunk_id * 32
+        if offset >= len(digests):
             raise ProjectError("CHUNK_NOT_FOUND", "unknown chunk_id", 404)
-        meta = manifest["chunks"][chunk_id]
-        del manifest  # Do not retain an oversized uncached manifest during body I/O.
+        digest = digests[offset:offset + 32].hex()
+        size = min(chunk_size, file_size - chunk_id * chunk_size)
+        del digests  # An uncached manifest need not stay alive during body I/O.
 
         def evicted(old_key):
             self.log.emit("cache_evict", request_id=request_id, file_id=old_key[0], chunk_id=old_key[1])
 
         data, status = self._chunk_fills.get_or_fetch(
-            key, lambda: self._fetch_chunk(file_id, chunk_id, request_id, meta), on_evict=evicted)
+            key, lambda: self._fetch_chunk(file_id, chunk_id, request_id, size, digest, evicted),
+            on_evict=evicted)
         if status == "HIT":
             self.log.emit("cache_hit", request_id=request_id, file_id=file_id, chunk_id=chunk_id)
-        return data, status, meta["sha256"]
+        return data.data, status, data.digest
 
-    def _fetch_chunk(self, file_id, chunk_id, request_id, meta):
-        self.log.emit("cache_miss", request_id=request_id, file_id=file_id, chunk_id=chunk_id)
-        response = self._get(f"/chunk/{file_id}/{chunk_id}", request_id, chunk=True,
-                             expected_length=meta["size"])
-        if response.status != 200:
-            raise ProjectError("ORIGIN_ERROR", f"origin fetch HTTP {response.status}", 502)
-        data = response.body
-        if len(data) != meta["size"] or sha256(data) != meta["sha256"]:
-            raise ProjectError("UPSTREAM_INTEGRITY_ERROR", "origin chunk does not match manifest", 502)
-        return data
+    def _fetch_chunk(self, file_id, chunk_id, request_id, size, digest, on_evict):
+        evicted = []
+        reservation = response = body = mapped = None
+        try:
+            reservation = self._chunk_memory.reserve(size, self.cache, evicted)
+            for key in evicted:
+                on_evict(key)
+            if size >= MAPPED_CHUNK_MIN:
+                try:
+                    mapped = MappedChunk(size, reservation)
+                except OSError as exc:
+                    raise ProjectError("BUSY", "chunk memory unavailable", 503) from exc
+            self.log.emit("cache_miss", request_id=request_id, file_id=file_id, chunk_id=chunk_id)
+            response = self._get(f"/chunk/{file_id}/{chunk_id}", request_id, chunk=True,
+                                 expected_length=size, destination=mapped)
+            if response.status != 200:
+                raise ProjectError("ORIGIN_ERROR", f"origin fetch HTTP {response.status}", 502)
+            if len(response.body) != size or sha256(response.body) != digest:
+                raise ProjectError("UPSTREAM_INTEGRITY_ERROR", "origin chunk does not match manifest", 502)
+            body = response.body if mapped is not None else ChunkBody(response.body, reservation)
+        finally:
+            response = None
+            if body is not None:
+                reservation.retain_body(size)
+            elif mapped is None and reservation is not None:
+                reservation.release()
+            elif reservation is None:
+                for key in evicted:
+                    on_evict(key)
+            mapped = None
+        return CachedChunk(body, digest)
 
 
 if __name__ == "__main__":

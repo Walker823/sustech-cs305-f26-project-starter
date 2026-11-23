@@ -1,12 +1,11 @@
-"""Real Podman quotas, eight CDN containers, 32 in-flight chunks and failures.
+"""Real Docker quotas, eight CDN containers, 32 in-flight chunks and failures.
 
-Run with sudo/root in WSL after building the project image. Services have
+Run in WSL with access to the local Docker daemon. Services have
 separate quotas; Origin and impairment proxies remain trusted host fixtures.
 """
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import secrets
 import shutil
@@ -40,15 +39,15 @@ class ContainerLab(Lab):
             wire = self.config(name + "-wire", config)
             inner = list(args)
             inner[config_index] = "/run/project-config.json"
-            command = ["podman", "run", "--rm", "--name", container, "--network", "host",
+            command = ["docker", "run", "--rm", "--name", container, "--network", "host",
                        "--cpus=1", "--memory=256m", "--memory-swap=256m", "--pids-limit=64",
-                       "--ulimit", "nofile=128:128", "--read-only", "--read-only-tmpfs=false",
+                       "--ulimit", "nofile=128:128", "--read-only",
                        "--tmpfs", "/tmp:rw,size=16m,mode=1777",
                        "--tmpfs", "/output:rw,size=16m,mode=1777",
                        "--user", "10001:10001", "--cap-drop", "ALL",
                        "--security-opt", "no-new-privileges", "--workdir", "/app",
-                       "--mount", f"type=bind,src={wire},dst=/run/project-config.json,ro=true",
-                       "--mount", f"type=bind,src={ROOT / 'tests/container_worker.py'},dst=/app/resource_worker.py,ro=true",
+                       "--mount", f"type=bind,src={wire},dst=/run/project-config.json,readonly",
+                       "--mount", f"type=bind,src={ROOT / 'tests/container_worker.py'},dst=/app/resource_worker.py,readonly",
                        self.image, "python", "-u", "/app/resource_worker.py", *inner]
             self.container_logs[name] = self.root / (name + ".jsonl")
         stdout, stderr = self.root / (name + ".jsonl"), self.root / (name + ".stderr")
@@ -70,7 +69,7 @@ class ContainerLab(Lab):
 
     def stop(self):
         for container in self.containers:
-            subprocess.run(["podman", "stop", "--time", "2", container],
+            subprocess.run(["docker", "stop", "--time", "2", container],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         super().stop()
 
@@ -102,10 +101,9 @@ def client(lab, name, file_id, sources, **settings):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image", default="localhost/cs305-v2")
+    parser.add_argument("--image", default="cs305-optimized")
     parser.add_argument("--output", type=Path, default=ROOT / "runtime/resource-results.json")
     args = parser.parse_args()
-    require(os.geteuid() == 0, "run via sudo/root for cgroup-enforced Podman")
     results = {}
     evidence = args.output.parent / "resource-evidence"
     evidence.mkdir(parents=True, exist_ok=True)
@@ -127,7 +125,7 @@ def main():
                 sources.append((node, url))
                 logs.append(log)
             log, wide = client(lab, "wide-client", "wide", sources, max_inflight_chunks=32,
-                                max_inflight_per_cdn=8, probe_interval_s=0.1, _test_seed_bytes=8 * 1024**2)
+                                max_inflight_per_cdn=8, probe_interval_s=0.5, _test_seed_bytes=8 * 1024**2)
             require(wide["exit_code"] == 0 and wide["outputs"] == {
                 "result.bin": {"size": 8 * 1024**2, "sha256": lab.manifests["wide"]["file_sha256"]}},
                 "8 MiB atomic replacement/hash/16 MiB output quota")

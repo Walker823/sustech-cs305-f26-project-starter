@@ -220,19 +220,20 @@ class DownloadTask:
     def choose_source(self, chunk):
         now = time.monotonic()
         candidates = [node for node in self.nodes.values() if not node.quarantined
-                      and now >= max(node.cooldown_until, node.retry_after_until)
-                      and not node.trial_inflight
-                      and (not node.recovering or node.inflight == 0)]
-        # Prefer an untried healthy source. Filter capacity afterwards: when
-        # that source is merely full, wait instead of retrying the failed CDN.
+                      and now >= max(node.cooldown_until, node.retry_after_until)]
+        # Apply retry precedence before checking slots, including the single
+        # recovery slot. An occupied slot does not make a source ineligible.
         if chunk.attempts:
             untried = [node for node in candidates if node.node_id not in chunk.tried]
             if untried:
                 candidates = untried
-        if not any(node.inflight < node.limit for node in candidates):
+        candidates = [node for node in candidates if node.inflight < node.limit
+                      and not node.trial_inflight
+                      and (not node.recovering or node.inflight == 0)]
+        if not candidates:
             return None
         if self.client.strategy == "round_robin":
-            allowed = {node.node_id for node in candidates if node.inflight < node.limit}
+            allowed = {node.node_id for node in candidates}
             for _ in range(len(self.rotation)):
                 node_id = self.rotation[0]
                 self.rotation.rotate(-1)

@@ -19,8 +19,8 @@ def require(condition, message):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--archive", type=Path, default=ROOT / "submission-v2.zip")
-    parser.add_argument("--image", help="optional local Podman image to compare; requires Podman access")
+    parser.add_argument("--archive", type=Path, default=ROOT / "submission-v3.zip")
+    parser.add_argument("--image", help="optional local Docker image to compare")
     args = parser.parse_args()
     sources = {path.name: path.read_bytes() for path in sorted((ROOT / "student").glob("*.py"))}
     hashes = {name: hashlib.sha256(data).hexdigest() for name, data in sources.items()}
@@ -65,7 +65,7 @@ def main():
         code = ("import hashlib,json,pathlib; print(json.dumps({p.name:hashlib.sha256(p.read_bytes()).hexdigest() "
                 "for p in pathlib.Path('/app/student').glob('*.py')}))")
         process = subprocess.run([
-            "podman", "run", "--rm", "--network=none", "--read-only", "--cap-drop=all",
+            "docker", "run", "--rm", "--network=none", "--read-only", "--cap-drop=all",
             "--security-opt=no-new-privileges", "--memory=256m", "--cpus=1", "--pids-limit=64",
             "--ulimit=nofile=128:128", "--env=PYTHONDONTWRITEBYTECODE=1",
             args.image, "python", "-c", code,

@@ -136,7 +136,7 @@ class HTTPTransport:
     def get_bytes(self, url, path, *, headers=None, connect_timeout_s=2.0,
                   read_idle_timeout_s=10.0, max_bytes=MAX_CHUNK_BYTES,
                   body_deadline_s=120.0, absolute_deadline=None, stop_event=None,
-                  expected_length=None, read_error_body=True):
+                  expected_length=None, read_error_body=True, destination=None):
         def remaining(default):
             if self._closed or (stop_event is not None and stop_event.is_set()):
                 raise ProjectError("CANCELLED", "request cancelled")
@@ -162,6 +162,7 @@ class HTTPTransport:
         handle = None
         body_deadline = None
         transport_socket = None
+        body = part = None
         try:
             # Connect has its own timeout, capped by the task's remaining time.
             # DNS uses the OS resolver, as in the course helper.
@@ -189,17 +190,21 @@ class HTTPTransport:
                 # buffering an untrusted error body at every concurrent slot.
                 return HTTPResult(response.status, response_headers, b"",
                                   (time.monotonic() - started) * 1000)
-            body = bytearray()
+            body = bytearray(length) if destination is None else destination
             body_deadline = time.monotonic() + body_deadline_s
-            while len(body) < length:
+            received = 0
+            while received < length:
                 transport_socket.settimeout(body_remaining())
-                part = response.read1(min(65536, length - len(body)))
+                part = response.read1(min(65536, length - received))
                 body_remaining()
                 if not part:
                     raise ProjectError("TRUNCATED_RESPONSE", "body shorter than Content-Length", 502)
-                body.extend(part)
+                end = received + len(part)
+                body[received:end] = part
+                received = end
             remaining(read_idle_timeout_s)
-            return HTTPResult(response.status, response_headers, bytes(body),
+            data = bytes(body) if destination is None else memoryview(body).toreadonly()
+            return HTTPResult(response.status, response_headers, data,
                               (time.monotonic() - started) * 1000)
         except ProjectError:
             remaining(read_idle_timeout_s)
@@ -213,6 +218,8 @@ class HTTPTransport:
             remaining(read_idle_timeout_s)
             raise ProjectError("NETWORK_ERROR", f"HTTP transport failed: {type(exc).__name__}", 502) from exc
         finally:
+            # Exception tracebacks can outlive the upstream memory reservation.
+            body = part = destination = None
             if handle is not None:
                 self._unregister(handle)
             if response is not None:

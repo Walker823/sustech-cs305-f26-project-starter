@@ -69,13 +69,13 @@ def main():
         with redirect_stdout(io.StringIO()):
             node = CDN({"cdn_id": "metadata", "origin_url": lab.origin_url,
                         "origin_chunk_token": lab.token, "cache_capacity_chunks": 2,
-                        "manifest_cache_bytes": 4096})
+                        "manifest_cache_bytes": 1024})
             try:
                 for index in range(20):
                     file_id = "meta" + str(index)
                     make_file(lab.root / "data", file_id, 32, 32)
                     node.get_chunk(file_id, 0, "meta-request")
-                    require(node._manifests.bytes_used <= 4096, "actual CDN metadata memory budget")
+                    require(node._manifests.bytes_used <= 1024, "actual CDN metadata memory budget")
                 require(len(node._manifests) < 20, "metadata was not evicted")
             finally:
                 node.events.close()
